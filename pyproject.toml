@@ -1,0 +1,78 @@
+#  pymhoscope -- Communicate with the Rigol MHO series oscilloscopes
+#  Copyright (C) 2026 Andreas Stöckel
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Affero General Public License as
+#  published by the Free Software Foundation, either version 3 of the
+#  License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU Affero General Public License for more details.
+#
+#  You should have received a copy of the GNU Affero General Public License
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pymhoscope"
+version = "0.1.0"
+description = "Capture analogue and logic analyser data from Rigol MHO900 series oscilloscopes"
+readme = "README.md"
+authors = [
+    { name = "Andreas Stöckel" }
+]
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+keywords = ["oscilloscope", "rigol", "mho900", "scpi", "logic analyser", "lxi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware",
+    "Typing :: Typed",
+]
+dependencies = [
+    "numpy>=1.26",
+    "zeroconf>=0.100",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.3",
+    "ty>=0.0.95",
+]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "PT"]
+ignore = ["E731"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pymhoscope"]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+# Scripts declare their own dependencies (PEP 723) that are not installed in
+# the project environment.
+[[tool.ty.overrides]]
+include = ["scripts/**"]
+rules = { import-not-found = "ignore" }
