@@ -5,18 +5,19 @@
 
 The Rigol MHO900 series oscilloscopes can save captured data to `.bin` and
 `.csv` files. If a logic analyser probe is connected and enabled, the logic
-analyser data is stored in those file as well.
+analyser data is stored to those file as well.
 
-Unfortunately, the stored logic analyser is corrupted whenever fewer than three
-analogue channels are enabled. For example, when two analogue channels are
-active, this affects all logic analyser samples beyond sample index 500,000.
+Unfortunately, the logic analyser data is corrupted whenever fewer than
+three analogue channels are enabled. For example, when two analogue channels are
+active, all logic analyser samples beyond sample index 500,000 are incorrect.
 With zero or one analogue channels, `.bin` dumps are already corrupted beyond
 250,000 samples. With three or four analogue channels, `.bin` dumps are fine.
 
-I provide a script that automatically fixes the bug (for `.bin` files only) on a
-network-connected scope from a Linux machine in
-[`patch_mho_la_save.py`](../scripts/patch_mho_la_save.py). Read on for a
-detailed description of what is going wrong.
+[`patch_mho_la_save.py`](../../scripts/patch_mho_la_save.py) patches the
+firmware (for `.bin` files only) on a network-connected scope to fix this bug.
+Note that the script is designed to be executed on a Linux machine and has not
+been tested on other platforms. Read on for a detailed description of what is
+going wrong.
 
 > [!NOTE]
 > This description is for the `00.01.00 build 2026/05/08` firmware on a Rigol
