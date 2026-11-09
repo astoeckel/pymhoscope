@@ -106,7 +106,8 @@ _SMB_USER = "rigol"
 _SMB_PASSWORD = "rigol"
 _SMB_DRIVE = "I:/"  # Drive letter under which the scope mounts the share.
 _SMB_FILENAME = "capture.bin"
-_SMB_PORT = 445  # The scope does not support other ports.
+_SMB_PORT = 445  # Default port, used if mount options are not injected.
+_SMB_MOUNT_OPTIONS = ("cache=loose",)  # Speeds up transfers by ~15-25%
 
 # Samples per `:WAVEFORM:DATA?` query in RAW mode. Larger reads are truncated
 # to 1M samples and fail with "Command execute failed (-200)".
@@ -115,9 +116,11 @@ _WAV_ATTEMPTS = 3
 
 # Transfer time model, fitted to captures of 1M to 500M samples of one channel
 # at 10 MSa/s: a fixed overhead plus bytes per second. SCPI transfers two
-# bytes per sample, the `.bin` file on the SMB share four (float32).
+# bytes per sample, the `.bin` file on the SMB share four (float32). With
+# injected mount options, SMB was fitted to 1M-50M samples with the LA enabled.
 _SCPI_OVERHEAD, _SCPI_BYTES_PER_S, _SCPI_BYTES_PER_SAMPLE = 0.7, 1.51e6, 2
 _SMB_OVERHEAD, _SMB_BYTES_PER_S, _SMB_BYTES_PER_SAMPLE = 6.5, 6.7e6, 4
+_SMB_INJECTED_OVERHEAD, _SMB_INJECTED_BYTES_PER_S = 6.7, 7.9e6
 
 # Seconds to wait for the scope to complete "*RST".
 _RESET_TIMEOUT = 60.0
@@ -157,13 +160,18 @@ class TransferMode(enum.Enum):
     records; cannot read the logic analyser data."""
 
 
-def _transfer_time(mode: TransferMode, n_samples: int) -> float:
+def _transfer_time(
+    mode: TransferMode, n_samples: int, *, inject_mount_options: bool
+) -> float:
     """
     Expected seconds to read `n_samples` samples (summed over all channels)
     with `mode` (`SMB` or `SCPI`).
     """
     if mode == TransferMode.SMB:
-        return _SMB_OVERHEAD + n_samples * _SMB_BYTES_PER_SAMPLE / _SMB_BYTES_PER_S
+        overhead, rate = _SMB_OVERHEAD, _SMB_BYTES_PER_S
+        if inject_mount_options:
+            overhead, rate = _SMB_INJECTED_OVERHEAD, _SMB_INJECTED_BYTES_PER_S
+        return overhead + n_samples * _SMB_BYTES_PER_SAMPLE / rate
     return _SCPI_OVERHEAD + n_samples * _SCPI_BYTES_PER_SAMPLE / _SCPI_BYTES_PER_S
 
 
@@ -244,6 +252,7 @@ class MHO900(Scope):
         timeout: float = 10.0,
         capture_timeout: float = 10.0,
         save_timeout: float = 600.0,
+        inject_mount_options: bool = True,
     ):
         """
         Parameters
@@ -274,6 +283,13 @@ class MHO900(Scope):
         save_timeout:
             Seconds to wait for the scope to write the logic analyser data
             to the SMB share.
+
+        inject_mount_options:
+            If `True`, append extra options for the scope's CIFS mount to the
+            SMB password: run the SMB server on a free unprivileged port and
+            enable client-side write caching. If `False`, use the scope's
+            default mount, which requires port 445; disable this if a firmware
+            update breaks the injection.
         """
         if addr is not None and serial_number is not None:
             raise ValueError("`addr` and `serial_number` are mutually exclusive")
@@ -304,6 +320,7 @@ class MHO900(Scope):
         self._timeout = timeout
         self._capture_timeout = capture_timeout
         self._save_timeout = save_timeout
+        self._inject_mount_options = inject_mount_options
         self._files: queue.Queue[bytearray] = queue.Queue()
         self._created = threading.Event()
         self._smb_connected = False
@@ -706,8 +723,11 @@ class MHO900(Scope):
                     for c in range(N_ANALOGUE_CHANNELS)
                 )
                 n_total = n_channels * n_samples
-                smb_faster = _transfer_time(TransferMode.SMB, n_total) < (
-                    _transfer_time(TransferMode.SCPI, n_total)
+                inject = self._inject_mount_options
+                smb_faster = _transfer_time(
+                    TransferMode.SMB, n_total, inject_mount_options=inject
+                ) < _transfer_time(
+                    TransferMode.SCPI, n_total, inject_mount_options=inject
                 )
                 if la_enabled:
                     return self._capture_smb(scpi, n_samples)
@@ -868,7 +888,9 @@ class MHO900(Scope):
                     share=_SMB_SHARE,
                     user=_SMB_USER,
                     password=_SMB_PASSWORD,
-                    port=_SMB_PORT,
+                    port=0 if self._inject_mount_options else _SMB_PORT,
+                    max_mpx_count=50 if self._inject_mount_options else 1,
+                    large_read_write=self._inject_mount_options,
                 )
             except PermissionError as e:
                 raise SMBServerError(
@@ -885,11 +907,15 @@ class MHO900(Scope):
             self._wait_smb_state(scpi, False)
         scpi(":SAVE:SMB:SERVERPATH", self._unc)
         scpi(":SAVE:SMB:USERNAME", _SMB_USER)
-        scpi(":SAVE:SMB:PASSWORD", _SMB_PASSWORD)
+        password = _SMB_PASSWORD
+        if self._inject_mount_options:
+            options = (f"port={self._smb.port}", *_SMB_MOUNT_OPTIONS)
+            password += "".join(f" -o {o}" for o in options)
+        scpi(":SAVE:SMB:PASSWORD", password)
         scpi(":SAVE:SMB:CONNECT")
         self._wait_smb_state(scpi, True, timeout=20.0)
         self._smb_connected = True
-        log.info("Scope connected to %s", self._unc)
+        log.info("Scope connected to %s (port %d)", self._unc, self._smb.port)
 
     @staticmethod
     def _wait_smb_state(scpi: Scpi, connected: bool, timeout: float = 10.0) -> None:

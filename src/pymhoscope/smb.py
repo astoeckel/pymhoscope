@@ -24,6 +24,7 @@ supported:
     NEGOTIATE, SESSION_SETUP_ANDX (raw or SPNEGO NTLMSSP, NTLMv2), TREE_CONNECT_ANDX,
     TREE_DISCONNECT, LOGOFF_ANDX, ECHO,
     NT_CREATE_ANDX, WRITE_ANDX, FLUSH, CLOSE, FIND_CLOSE2,
+    READ_ANDX (always refused; see `_read_andx`),
     TRANS2: QUERY_FS_INFORMATION, QUERY_PATH_INFORMATION,
             QUERY_FILE_INFORMATION, SET_FILE_INFORMATION,
             SET_PATH_INFORMATION, FIND_FIRST2, FIND_NEXT2
@@ -152,6 +153,7 @@ class MemoryBackend(Backend):
 SMB_COM_CLOSE = 0x04
 SMB_COM_FLUSH = 0x05
 SMB_COM_ECHO = 0x2B
+SMB_COM_READ_ANDX = 0x2E
 SMB_COM_WRITE_ANDX = 0x2F
 SMB_COM_TRANSACTION2 = 0x32
 SMB_COM_FIND_CLOSE2 = 0x34
@@ -204,6 +206,8 @@ MAX_BUFFER_SIZE = 64000
 # Unicode, large files, RPC APIs, NT SMBs, NT status, extended security. Without
 # large files (0x8), the scope's client truncates files at 2 GiB - 1 byte.
 CAPABILITIES = 0x8000007C
+CAP_LARGE_READX = 0x4000
+CAP_LARGE_WRITEX = 0x8000
 # SPNEGO negTokenInit advertising NTLMSSP (1.3.6.1.4.1.311.2.2.10)
 NEGOTIATE_BLOB = bytes.fromhex(
     "601c06062b0601050502a0123010a00e300c060a2b06010401823702020a"
@@ -522,12 +526,18 @@ class VirtualSMBServer:
         free_bytes: int = 1 << 40,
         max_file_size: int = 16 << 30,
         challenge: bytes | None = None,  # fixed NTLM challenge (testing only)
+        max_mpx_count: int = 1,
+        large_read_write: bool = False,
     ):
         self.backend = backend
         self.share = share
         self.user = user
         self.free_bytes = free_bytes
         self.max_file_size = max_file_size
+        self.max_mpx_count = max_mpx_count
+        self.capabilities = CAPABILITIES
+        if large_read_write:
+            self.capabilities |= CAP_LARGE_READX | CAP_LARGE_WRITEX
         self._password_hash = nt_hash(password)
         self._fixed_challenge = challenge
         self._lock = threading.RLock()
@@ -547,6 +557,11 @@ class VirtualSMBServer:
 
         self._tcp = _TCPServer((listen_address, port), Handler)
         self._thread: threading.Thread | None = None
+
+    @property
+    def port(self) -> int:
+        """TCP port the server listens on; chosen by the OS if `port=0`."""
+        return self._tcp.server_address[1]
 
     ###########################################################################
     # Lifecycle                                                               #
@@ -756,12 +771,12 @@ class VirtualSMBServer:
             "<HBHHIIIIQhB",
             dialects.index("NT LM 0.12"),
             SECURITY_MODE,
-            1,
+            self.max_mpx_count,
             1,
             MAX_BUFFER_SIZE,
             65536,
             0,
-            CAPABILITIES,
+            self.capabilities,
             _filetime(time.time()),
             0,
             0,
@@ -1118,6 +1133,12 @@ class VirtualSMBServer:
             "<HHHH", length & 0xFFFF, 0xFFFF, length >> 16, 0
         )
         return STATUS_SUCCESS, words, b""
+
+    def _read_andx(self, session, req):
+        # With `cache=loose`, the Linux client reads pages it only partially
+        # overwrites. When the read fails, it writes the data directly instead.
+        log.debug("READ_ANDX refused (share is write-only)")
+        raise SMBError(STATUS_ACCESS_DENIED, "share is write-only")
 
     def _flush(self, session, req):
         (fid,) = struct.unpack_from("<H", req.words)
@@ -1477,6 +1498,7 @@ class VirtualSMBServer:
         SMB_COM_ECHO: _echo,
         SMB_COM_NT_CREATE_ANDX: _nt_create,
         SMB_COM_WRITE_ANDX: _write_andx,
+        SMB_COM_READ_ANDX: _read_andx,
         SMB_COM_FLUSH: _flush,
         SMB_COM_CLOSE: _close,
         SMB_COM_FIND_CLOSE2: _find_close2,

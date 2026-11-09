@@ -7,18 +7,13 @@ The defining feature of this package is that it supports reading the logic
 analyser data remotely. Logic analyser data is not accessible through the
 `:WAV:DATA?` SCPI command. Instead, the only way to efficiently access the logic
 analyser data is by saving `.bin` files. To automate this, this package
-implements a tiny Python SMB1 server, instructs the scope to connect to that
+implements a tiny Python SMB1 server (by default running on a random,
+unprivilleged port), instructs the scope to connect to that
 server, and then receives SMB data as it is written to the virtual SMB
 filesystem. SMB transfers also have the advantage that they are faster: they
-reach more than 6 MB/s whereas SCPI transfers reach only about 1.5 MB/s;
-`pymhoscope` automatically selects SMB transfers (even when the logic analyser
-is not active) when they are faster despite the overhead of setting up an SMB
-connection.
-
-> [!NOTE]
-> This package primarily targets Linux. The SMB server workaround will not work
-> on Windows, which does not let arbitrary user-space applications start a
-> server on SMB port 445.
+reach 8 MB/s whereas SCPI transfers reach only about 1.5 MB/s; `pymhoscope`
+automatically selects SMB transfers (even when the logic analyser is not active)
+when they are faster despite the overhead of setting up an SMB connection.
 
 > [!CAUTION]
 > The MHO900 series firmware `00.01.00 build 2026/05/08` has a bug where the
@@ -64,24 +59,29 @@ obvious that this menu is scrollable and that the button exists.
 
 ![Screenshot of the "Utility" menu on the MHO900 with the "mDNS" toggle and the "Apply" button highlighted](docs/mdns_annotated.png)
 
-## Allowing SMB Servers
+## SMB Server Port Injection
 
-An unfortunate side-effect of the SMB-workaround is that, when using SMB,
-there must be no other SMB server running on the host machine, and port 445
-must be marked as "unprivileged" via
+By default, _pymhoscope_ injects extra options into the `mount -t cifs`
+command executed by the scope. Those options instruct it to connect to SMB on a
+random unprivileged port.
+
+Just in case an oscilloscope firmware update breaks this unducomented feature,
+pass `inject_mount_options=False` to the `MHO900` constructor. The server will
+then use port 445. That means that there must be no other SMB server running on
+the host machine, and port 445 must be marked as "unprivileged" and allowed by
+the firewall.
+
+Note that running a custom server on port 445 does not work on Windows. On Linux
+(tested on Fedora Workstation), run the following commands to make port 445
+unprivileged and to allow connections to port 445:
+
 ```sh
 sudo sysctl -w net.ipv4.ip_unprivileged_port_start=445
-```
-
-Furthermore, the firewall must be configured to allow SMB connections. On
-Fedora, run the following command.
-
-```sh
 sudo firewall-cmd --add-service=samba
 ```
 
 Note that neither the `sysctl` nor the `firewall-cmd` command make permanent
-changes to the system.
+changes to the system. These commands must be re-executed after every boot.
 
 ## Usage
 
